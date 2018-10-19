@@ -128,7 +128,8 @@ class CollectiveAllReduceStrategyTestBase(
             # TODO(yuefengz): support non-Mirrored variable as destinations.
             g = d.reduce(
                 variable_scope.VariableAggregation.SUM, g, destinations=v)
-            with ops.control_dependencies(d.unwrap(d.update(v, update, g))):
+            with ops.control_dependencies(
+                d.update(v, update, g, grouped=False)):
               after_list.append(d.read_var(v))
         return before_list, after_list
 
@@ -245,6 +246,16 @@ class DistributedCollectiveAllReduceStrategyTest(
     """Create a local cluster with 3 workers."""
     cls._cluster_spec = multi_worker_test_base.create_in_process_cluster(
         num_workers=3, num_ps=0)
+
+  def test_num_replicas_in_sync(self):
+    distribution = collective_all_reduce_strategy.CollectiveAllReduceStrategy(
+        num_gpus_per_worker=2)
+    distribution.configure(cluster_spec=self._cluster_spec, task_type='worker',
+                           task_id=0)
+    num_workers = len(self._cluster_spec.get('chief', []) +
+                      self._cluster_spec.get('worker', []))
+    self.assertEqual(2 * num_workers,
+                     distribution.num_replicas_in_sync)
 
   @combinations.generate(
       combinations.combine(mode=['graph'], num_gpus=[0, 1, 2], required_gpus=1))

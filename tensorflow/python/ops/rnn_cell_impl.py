@@ -370,7 +370,7 @@ class LayerRNNCell(RNNCell):
                                      *args, **kwargs)
 
 
-@tf_export("nn.rnn_cell.BasicRNNCell")
+@tf_export(v1=["nn.rnn_cell.BasicRNNCell"])
 class BasicRNNCell(LayerRNNCell):
   """The most basic RNN cell.
 
@@ -393,6 +393,8 @@ class BasicRNNCell(LayerRNNCell):
       `trainable` etc when constructing the cell from configs of get_config().
   """
 
+  @deprecated(None, "This class is equivalent as tf.keras.layers.SimpleRNNCell,"
+                    " and will be replaced by that in Tensorflow 2.0.")
   def __init__(self,
                num_units,
                activation=None,
@@ -611,7 +613,7 @@ class LSTMStateTuple(_LSTMStateTuple):
 # TODO(scottzhu): Stop exporting this class in TF 2.0.
 @tf_export("nn.rnn_cell.BasicLSTMCell")
 class BasicLSTMCell(LayerRNNCell):
-  """DEPRECATED: Please use @{tf.nn.rnn_cell.LSTMCell} instead.
+  """DEPRECATED: Please use `tf.nn.rnn_cell.LSTMCell` instead.
 
   Basic LSTM recurrent network cell.
 
@@ -1463,6 +1465,30 @@ class MultiRNNCell(RNNCell):
         # We know here that state_size of each cell is not a tuple and
         # presumably does not contain TensorArrays or anything else fancy
         return super(MultiRNNCell, self).zero_state(batch_size, dtype)
+
+  @property
+  def trainable_weights(self):
+    if not self.trainable:
+      return []
+    weights = []
+    for cell in self._cells:
+      if isinstance(cell, base_layer.Layer):
+        weights += cell.trainable_weights
+    return weights
+
+  @property
+  def non_trainable_weights(self):
+    weights = []
+    for cell in self._cells:
+      if isinstance(cell, base_layer.Layer):
+        weights += cell.non_trainable_weights
+    if not self.trainable:
+      trainable_weights = []
+      for cell in self._cells:
+        if isinstance(cell, base_layer.Layer):
+          trainable_weights += cell.trainable_weights
+      return trainable_weights + weights
+    return weights
 
   def call(self, inputs, state):
     """Run this multi-layer cell on inputs, starting from state."""

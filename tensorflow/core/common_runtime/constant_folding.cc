@@ -250,12 +250,9 @@ bool IsConstantFoldable(
   // constant-fold functions.
   // TODO(phawkins): allow constant-folding for functions; functions may
   // be arbitrarily expensive to execute.
-  if (!FindKernelDef(DeviceType(DEVICE_CPU), n->def(), /*def=*/nullptr,
-                     /*kernel_class_name=*/nullptr)
-           .ok()) {
+  if (!KernelDefAvailable(DeviceType(DEVICE_CPU), n->def())) {
     return false;
   }
-
   return true;
 }
 
@@ -470,19 +467,19 @@ bool ReplaceTensorWithConstant(
     const ConstantFoldNameGenerator& generate_new_name) {
   // Be conservative when replacing a tensor with a constant, when not
   // running on CPU.
-  // 1) If the destination tensor is not an int32 tensor, and has HOST_MEMORY
+  // 1) Do not replace another constant.
+  // 2) If the destination tensor is not an int32 tensor, and has HOST_MEMORY
   // constraint, do not replace it.
-  // 2) If the destination tensor is an int32 tensor, but has DEVICE_MEMORY
+  // 3) If the destination tensor is an int32 tensor, and has DEVICE_MEMORY
   // constraint, do not replace it.
-  // 3) If the constant op created does not have a kernel implementation
-  // for the device, do not use it.
   // 4) If the size of the constant in bytes is too large (>
   // max_constant_in_bytes), do not replace it. This prevents the size of the
   // Graph from growing too large.
+  // 5) If the constant op created does not have a kernel implementation
+  // for the device, do not use it.
   // TODO(keveman): Consider adding a new constant op that has a kernel
   // implementation for all types, but with HostMemory constraint on it's
   // output.
-  // 5) Do not replace another constant.
   if (tensor.first->IsConstant()) {
     return false;
   }

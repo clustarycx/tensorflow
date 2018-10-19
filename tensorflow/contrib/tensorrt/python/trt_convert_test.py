@@ -49,6 +49,7 @@ class TrtConvertTest(test_util.TensorFlowTestCase):
   def testTensorrtRewriterConfig(self):
     """Test case for trt_convert.tensorrt_rewriter_config()."""
     rewriter_cfg = trt_convert.tensorrt_rewriter_config(
+        rewriter_config=None,
         max_batch_size=128,
         max_workspace_size_bytes=1234,
         precision_mode="INT8",
@@ -56,6 +57,7 @@ class TrtConvertTest(test_util.TensorFlowTestCase):
         is_dynamic_op=True,
         maximum_cached_engines=2,
         cached_engine_batch_sizes=[1, 128])
+    self.assertEqual(["constfold", "layout"], rewriter_cfg.optimizers)
     trt_optimizer = None
     for optimizer in rewriter_cfg.custom_optimizers:
       if optimizer.name == "TensorRTOptimizer":
@@ -94,7 +96,7 @@ class TrtConvertTest(test_util.TensorFlowTestCase):
       with g.device("/GPU:0"):
         inp = array_ops.placeholder(
             dtype=dtypes.float32, shape=[None, 1, 1], name="input")
-        var = variables.Variable([[[1.0]]], dtype=dtypes.float32, name="v1")
+        var = variables.VariableV1([[[1.0]]], dtype=dtypes.float32, name="v1")
         add = inp + var.value()
         mul = inp * add
         add = mul + add

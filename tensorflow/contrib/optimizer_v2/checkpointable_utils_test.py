@@ -24,7 +24,6 @@ import os
 
 import six
 
-from tensorflow.contrib.optimizer_v2 import adam
 from tensorflow.python.client import session as session_lib
 from tensorflow.python.eager import backprop
 from tensorflow.python.eager import context
@@ -35,6 +34,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import test_util
 from tensorflow.python.keras.engine import training
 from tensorflow.python.keras.layers import core
+from tensorflow.python.keras.optimizer_v2 import adam
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import resource_variable_ops
@@ -98,7 +98,7 @@ class CheckpointingTests(test.TestCase):
     # A nuisance Model using the same optimizer. Its slot variables should not
     # go in the checkpoint, since it is never depended on.
     other_model = MyModel()
-    optimizer = adam.AdamOptimizer(0.001)
+    optimizer = adam.Adam(0.001)
     optimizer_step = training_util.get_or_create_global_step()
     root_checkpointable = util.Checkpoint(
         optimizer=optimizer, model=model, optimizer_step=optimizer_step)
@@ -130,8 +130,8 @@ class CheckpointingTests(test.TestCase):
         # non-Layer dependency of the model
         "model/_non_layer/a_variable",
         # The optimizer creates two non-slot variables
-        "optimizer/beta1_power",
-        "optimizer/beta2_power",
+        "optimizer/beta_1_power",
+        "optimizer/beta_2_power",
         # Slot variables
         "model/_second/kernel/.OPTIMIZER_SLOT/optimizer/m",
         "model/_second/kernel/.OPTIMIZER_SLOT/optimizer/v",
@@ -143,10 +143,12 @@ class CheckpointingTests(test.TestCase):
     suffix = "/.ATTRIBUTES/VARIABLE_VALUE"
     expected_checkpoint_names = [
         name + suffix for name in expected_checkpoint_names]
-    # The Dense layers also save get_config() JSON
-    expected_checkpoint_names.extend(
-        ["model/_second/.ATTRIBUTES/OBJECT_CONFIG_JSON",
-         "model/_named_dense/.ATTRIBUTES/OBJECT_CONFIG_JSON"])
+    # The optimizer and Dense layers also save get_config() JSON
+    expected_checkpoint_names.extend([
+        "optimizer/.ATTRIBUTES/OBJECT_CONFIG_JSON",
+        "model/_second/.ATTRIBUTES/OBJECT_CONFIG_JSON",
+        "model/_named_dense/.ATTRIBUTES/OBJECT_CONFIG_JSON"
+    ])
     named_variables = {v.name: v for v in named_variables}
     six.assertCountEqual(self, expected_checkpoint_names,
                          named_variables.keys())
@@ -161,21 +163,20 @@ class CheckpointingTests(test.TestCase):
         "my_model/dense/kernel",
         named_variables["model/_named_dense/kernel" + suffix].full_name)
     self.assertEqual(
-        "beta1_power",
-        named_variables["optimizer/beta1_power" + suffix].full_name)
+        "beta_1_power",
+        named_variables["optimizer/beta_1_power" + suffix].full_name)
     self.assertEqual(
-        "beta2_power",
-        named_variables["optimizer/beta2_power" + suffix].full_name)
+        "beta_2_power",
+        named_variables["optimizer/beta_2_power" + suffix].full_name)
     # Spot check the generated protocol buffers.
     self.assertEqual("optimizer",
                      serialized_graph.nodes[0].children[1].local_name)
     optimizer_node = serialized_graph.nodes[serialized_graph.nodes[0].children[
         1].node_id]
-    self.assertEqual("beta1_power",
-                     optimizer_node.children[0].local_name)
-    self.assertEqual("beta1_power",
-                     serialized_graph.nodes[optimizer_node.children[0].node_id]
-                     .attributes[0].full_name)
+    self.assertEqual("beta_1_power", optimizer_node.children[0].local_name)
+    self.assertEqual(
+        "beta_1_power", serialized_graph.nodes[
+            optimizer_node.children[0].node_id].attributes[0].full_name)
     self.assertEqual(
         "my_model/dense/kernel",
         serialized_graph.nodes[optimizer_node.slot_variables[0]
@@ -207,7 +208,7 @@ class CheckpointingTests(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   def testSaveRestore(self):
     model = MyModel()
-    optimizer = adam.AdamOptimizer(0.001)
+    optimizer = adam.Adam(0.001)
     root_checkpointable = util.Checkpoint(
         optimizer=optimizer, model=model)
     input_value = constant_op.constant([[3.]])
@@ -239,11 +240,12 @@ class CheckpointingTests(test.TestCase):
     if not context.executing_eagerly():
       return  # Restore-on-create is only supported when executing eagerly
     on_create_model = MyModel()
-    on_create_optimizer = adam.AdamOptimizer(
+    on_create_optimizer = adam.Adam(
         0.001,
-        # Preserve beta1_power and beta2_power when appying gradients so we can
-        # test that they've been restored correctly.
-        beta1=1.0, beta2=1.0)
+        # Preserve beta_1_power and beta_2_power when appying gradients
+        # so we can test that they've been restored correctly.
+        beta_1=1.0,
+        beta_2=1.0)
     on_create_root = util.Checkpoint(
         optimizer=on_create_optimizer, model=on_create_model)
     # Deferred restoration
@@ -263,9 +265,9 @@ class CheckpointingTests(test.TestCase):
     dummy_var = resource_variable_ops.ResourceVariable([1.])
     on_create_optimizer.minimize(loss=dummy_var.read_value)
     status.assert_consumed()
-    beta1_power, beta2_power = on_create_optimizer._get_beta_accumulators()
-    self.assertAllEqual(optimizer_variables[0], self.evaluate(beta1_power))
-    self.assertAllEqual(optimizer_variables[1], self.evaluate(beta2_power))
+    beta_1_power, beta_2_power = on_create_optimizer._get_beta_accumulators()
+    self.assertAllEqual(optimizer_variables[0], self.evaluate(beta_1_power))
+    self.assertAllEqual(optimizer_variables[1], self.evaluate(beta_2_power))
 
   # TODO(allenl): Debug garbage created by this test in python3.
   def testDeferredRestorationUsageEager(self):
@@ -275,7 +277,7 @@ class CheckpointingTests(test.TestCase):
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     for training_continuation in range(3):
       model = MyModel()
-      optimizer = adam.AdamOptimizer(0.001)
+      optimizer = adam.Adam(0.001)
       root = util.Checkpoint(
           optimizer=optimizer, model=model,
           optimizer_step=training_util.get_or_create_global_step())
@@ -300,7 +302,7 @@ class CheckpointingTests(test.TestCase):
       for training_continuation in range(3):
         with ops.Graph().as_default():
           model = MyModel()
-          optimizer = adam.AdamOptimizer(0.001)
+          optimizer = adam.Adam(0.001)
           root = util.Checkpoint(
               optimizer=optimizer, model=model,
               global_step=training_util.get_or_create_global_step())
@@ -338,7 +340,7 @@ class CheckpointingTests(test.TestCase):
       with ops.Graph().as_default(), self.test_session(
           graph=ops.get_default_graph()), test_util.device(use_gpu=True):
         model = MyModel()
-        optimizer = adam.AdamOptimizer(0.001)
+        optimizer = adam.Adam(0.001)
         root = util.Checkpoint(
             optimizer=optimizer, model=model,
             global_step=training_util.get_or_create_global_step())
@@ -372,7 +374,7 @@ class CheckpointingTests(test.TestCase):
           graph=ops.get_default_graph()), test_util.device(use_gpu=True):
         model = MyModel()
         # Don't actually train so we can test variable values
-        optimizer = adam.AdamOptimizer(0.)
+        optimizer = adam.Adam(0.)
         root = util.Checkpoint(
             optimizer=optimizer, model=model,
             global_step=training_util.get_or_create_global_step())
@@ -421,7 +423,7 @@ class CheckpointingTests(test.TestCase):
 
     with context.eager_mode():
       model = Model()
-      optimizer = adam.AdamOptimizer(learning_rate=0.05)
+      optimizer = adam.Adam(learning_rate=0.05)
       checkpoint_directory = self.get_temp_dir()
       checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
       checkpoint = util.Checkpoint(
@@ -442,7 +444,7 @@ class CheckpointingTests(test.TestCase):
     root = tracking.Checkpointable()
     root.var = util.add_variable(
         root, name="var", initializer=0.)
-    optimizer = adam.AdamOptimizer(0.1)
+    optimizer = adam.Adam(0.1)
     if context.executing_eagerly():
       optimizer.minimize(root.var.read_value)
     else:
@@ -476,8 +478,8 @@ class CheckpointingTests(test.TestCase):
     no_slot_status.assert_consumed()
     no_slot_status.run_restore_ops()
     self.assertEqual(12., self.evaluate(new_root.var))
-    new_root.optimizer = adam.AdamOptimizer(0.1)
-    with self.assertRaisesRegexp(AssertionError, "beta1_power"):
+    new_root.optimizer = adam.Adam(0.1)
+    with self.assertRaisesRegexp(AssertionError, "beta_1_power"):
       slot_status.assert_consumed()
     self.assertEqual(12., self.evaluate(new_root.var))
     if context.executing_eagerly():
@@ -509,7 +511,7 @@ class CheckpointingTests(test.TestCase):
         checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
         obj = tracking.Checkpointable()
         obj.var = variable_scope.get_variable(name="v", initializer=0.)
-        obj.opt = adam.AdamOptimizer(0.1)
+        obj.opt = adam.Adam(0.1)
         obj.opt.minimize(obj.var.read_value())
         self.evaluate(util.gather_initializers(obj))
         saver = util.CheckpointableSaver(obj)
@@ -527,7 +529,7 @@ class CheckpointingTests(test.TestCase):
         checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
         obj = tracking.Checkpointable()
         obj.var = variable_scope.get_variable(name="v", initializer=0.)
-        obj.opt = adam.AdamOptimizer(0.1)
+        obj.opt = adam.Adam(0.1)
         obj.opt.minimize(obj.var.read_value())
         self.evaluate(util.gather_initializers(obj))
         saver = util.CheckpointableSaver(obj)
@@ -541,7 +543,7 @@ class CheckpointingTests(test.TestCase):
     with context.graph_mode():
       checkpoint_directory = self.get_temp_dir()
       checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
-      optimizer = adam.AdamOptimizer(0.001)
+      optimizer = adam.Adam(0.001)
       # Construct a model in one graph
       first_graph = ops.Graph()
       first_session = session_lib.Session(graph=first_graph)
@@ -556,8 +558,8 @@ class CheckpointingTests(test.TestCase):
         self.evaluate(first_variable.assign([1.]))
         self.evaluate(optimizer.get_slot(
             var=first_variable, name="m").assign([2.]))
-        beta1_power, _ = optimizer._get_beta_accumulators()
-        self.evaluate(beta1_power.assign(3.))
+        beta_1_power, _ = optimizer._get_beta_accumulators()
+        self.evaluate(beta_1_power.assign(3.))
 
       # Save and load in a second graph
       second_graph = ops.Graph()
@@ -571,29 +573,29 @@ class CheckpointingTests(test.TestCase):
         self.evaluate(second_variable.assign([4.]))
         self.evaluate(optimizer.get_slot(
             var=second_variable, name="m").assign([5.]))
-        beta1_power, _ = optimizer._get_beta_accumulators()
-        self.evaluate(beta1_power.assign(6.))
+        beta_1_power, _ = optimizer._get_beta_accumulators()
+        self.evaluate(beta_1_power.assign(6.))
         save_path = second_root_checkpointable.save(checkpoint_prefix)
         self.evaluate(second_variable.assign([7.]))
         self.evaluate(optimizer.get_slot(
             var=second_variable, name="m").assign([8.]))
-        beta1_power, _ = optimizer._get_beta_accumulators()
-        self.assertAllEqual(6., self.evaluate(beta1_power))
+        beta_1_power, _ = optimizer._get_beta_accumulators()
+        self.assertAllEqual(6., self.evaluate(beta_1_power))
         status = second_root_checkpointable.restore(save_path)
         status.assert_consumed().run_restore_ops()
         self.assertAllEqual([4.], self.evaluate(second_variable))
         self.assertAllEqual([5.], self.evaluate(optimizer.get_slot(
             var=second_variable, name="m")))
-        beta1_power, _ = optimizer._get_beta_accumulators()
-        self.assertAllEqual(6., self.evaluate(beta1_power))
+        beta_1_power, _ = optimizer._get_beta_accumulators()
+        self.assertAllEqual(6., self.evaluate(beta_1_power))
 
       # Check that the first graph is unmolested
       with first_graph.as_default(), first_session.as_default():
         self.assertAllEqual([1.], self.evaluate(first_variable))
         self.assertAllEqual([2.], self.evaluate(optimizer.get_slot(
             var=first_variable, name="m")))
-        beta1_power, _ = optimizer._get_beta_accumulators()
-        self.assertAllEqual(3., self.evaluate(beta1_power))
+        beta_1_power, _ = optimizer._get_beta_accumulators()
+        self.assertAllEqual(3., self.evaluate(beta_1_power))
 
 
 class TemplateTests(test.TestCase):
@@ -612,7 +614,7 @@ class TemplateTests(test.TestCase):
 
     save_template = template.make_template("s1", _templated)
     v1_save, _, v2_save = save_template()
-    optimizer = adam.AdamOptimizer(0.0)
+    optimizer = adam.Adam(0.0)
     save_root = util.Checkpoint(
         my_template=save_template, optimizer=optimizer)
     optimizer.minimize(v1_save.read_value)
@@ -624,7 +626,7 @@ class TemplateTests(test.TestCase):
     save_path = save_root.save(checkpoint_prefix)
 
     load_template = template.make_template("s2", _templated)
-    load_optimizer = adam.AdamOptimizer(0.0)
+    load_optimizer = adam.Adam(0.0)
     load_root = util.Checkpoint(
         my_template=load_template, optimizer=load_optimizer)
     status = load_root.restore(save_path)
@@ -644,7 +646,7 @@ class CheckpointCompatibilityTests(test.TestCase):
   def _initialized_model(self):
     input_value = constant_op.constant([[3.]])
     model = MyModel()
-    optimizer = adam.AdamOptimizer(0.001)
+    optimizer = adam.Adam(0.001)
     optimizer_step = training_util.get_or_create_global_step()
     root_checkpointable = util.Checkpoint(
         optimizer=optimizer, model=model, optimizer_step=optimizer_step)
@@ -659,8 +661,8 @@ class CheckpointCompatibilityTests(test.TestCase):
     self.evaluate(model._named_dense.bias.assign([1.]))
     self.evaluate(optimizer.get_slot(
         var=model._named_dense.bias, name="m").assign([2.]))
-    beta1_power, _ = optimizer._get_beta_accumulators()
-    self.evaluate(beta1_power.assign(3.))
+    beta_1_power, _ = optimizer._get_beta_accumulators()
+    self.evaluate(beta_1_power.assign(3.))
     return root_checkpointable
 
   def _set_sentinels(self, root_checkpointable):
@@ -669,8 +671,8 @@ class CheckpointCompatibilityTests(test.TestCase):
         root_checkpointable.optimizer.get_slot(
             var=root_checkpointable.model._named_dense.bias, name="m")
         .assign([102.]))
-    beta1_power, _ = root_checkpointable.optimizer._get_beta_accumulators()
-    self.evaluate(beta1_power.assign(103.))
+    beta_1_power, _ = root_checkpointable.optimizer._get_beta_accumulators()
+    self.evaluate(beta_1_power.assign(103.))
 
   def _check_sentinels(self, root_checkpointable):
     self.assertAllEqual(
@@ -678,8 +680,8 @@ class CheckpointCompatibilityTests(test.TestCase):
     self.assertAllEqual([2.], self.evaluate(
         root_checkpointable.optimizer.get_slot(
             var=root_checkpointable.model._named_dense.bias, name="m")))
-    beta1_power, _ = root_checkpointable.optimizer._get_beta_accumulators()
-    self.assertAllEqual(3., self.evaluate(beta1_power))
+    beta_1_power, _ = root_checkpointable.optimizer._get_beta_accumulators()
+    self.assertAllEqual(3., self.evaluate(beta_1_power))
 
   def _write_name_based_checkpoint(self):
     checkpoint_directory = self.get_temp_dir()
@@ -750,8 +752,7 @@ class CheckpointCompatibilityTests(test.TestCase):
       save_path = root.save(file_prefix=checkpoint_prefix)
     with context.graph_mode():
       save_graph = ops.Graph()
-      with save_graph.as_default(), self.test_session(
-          graph=save_graph):
+      with save_graph.as_default(), self.test_session(graph=save_graph):
         root = self._initialized_model()
         self._set_sentinels(root)
         root.restore(save_path).assert_consumed().run_restore_ops()

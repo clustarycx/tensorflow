@@ -49,6 +49,20 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "legacy_types",
+    srcs = [],
+    hdrs = [
+        "compatibility.h",
+        "legacy_types.h",
+        "types.h",
+    ],
+    deps = [
+        "//tensorflow/contrib/lite/kernels:op_macros",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)
+
 config_setting(
     name = "arm",
     values = {
@@ -198,6 +212,7 @@ cc_library(
         ":strided_slice_logic",
         ":tensor_utils",
         ":types",
+        ":legacy_types",
         ":legacy_reference_base",
         ":round",
         "//third_party/eigen3",
@@ -336,6 +351,7 @@ cc_library(
         ":quantization_util",
         ":round",
         ":strided_slice_logic",
+        ":legacy_types",
         ":types",
         "@gemmlowp",
         "//tensorflow/contrib/lite/c:c_api_internal",
@@ -585,6 +601,22 @@ cc_test(
 cc_test(
     name = "resize_bilinear_test",
     srcs = ["resize_bilinear_test.cc"],
+    tags = [
+        "no_oss",
+        "tflite_not_portable",
+    ],
+    deps = [
+        ":optimized_base",
+        ":reference_base",
+        ":test_util",
+        ":types",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "resize_nearest_neighbor_test",
+    srcs = ["resize_nearest_neighbor_test.cc"],
     tags = [
         "no_oss",
         "tflite_not_portable",
